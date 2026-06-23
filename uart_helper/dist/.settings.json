@@ -1,0 +1,16 @@
+{
+  "port": "COM18  |  USB-SERIAL CH340 (COM18)",
+  "baud": "921600",
+  "data_bits": "8",
+  "stop_bits": "1",
+  "parity": "None",
+  "buffer": "500,000",
+  "timer_interval": "100",
+  "hex_rx": false,
+  "hex_tx": false,
+  "timestamp": true,
+  "timeout": false,
+  "frame_gap": true,
+  "frame_gap_ms": "50",
+  "newline": false
+}
