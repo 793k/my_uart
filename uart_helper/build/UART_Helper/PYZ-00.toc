@@ -29,6 +29,7 @@
   ('_threading_local',
    'C:\\Users\\793k\\AppData\\Local\\Programs\\Python\\Python310\\lib\\_threading_local.py',
    'PYMODULE'),
+  ('app_cache', 'D:\\MY\\uart\\uart_helper\\app_cache.py', 'PYMODULE'),
   ('argparse',
    'C:\\Users\\793k\\AppData\\Local\\Programs\\Python\\Python310\\lib\\argparse.py',
    'PYMODULE'),

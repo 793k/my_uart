@@ -29,6 +29,9 @@ DEFAULT_RX_BUFFER = 500000
 # 自动打包备份目录
 RX_BACKUP_DIR = "rx_backup"
 
+# 本地缓存根目录（位于系统"文档"目录下，由 app_cache.py 管理）
+CACHE_FOLDER_NAME = "UART_Helper"
+
 # 时间戳超时间隔选项 (ms)
 TIMESTAMP_TIMEOUT_OPTIONS = [100, 500, 1000, 2000, 5000, 10000]
 DEFAULT_TIMESTAMP_TIMEOUT = 1000
@@ -42,7 +45,7 @@ WINDOW_TITLE = "UART 串口助手"
 WINDOW_MIN_SIZE = (900, 650)
 
 # 版本信息（左下角显示；发布新版时更新版本号与时间）
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0"
 APP_UPDATE_TIME = "2026-09-07"
 
 # 显示设置

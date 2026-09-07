@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGroupBox, QComboBox, QPushButton, QLineEdit, QTextEdit,
     QLabel, QCheckBox, QSpinBox, QMessageBox, QFileDialog, QFrame,
-    QSizePolicy, QSplitter
+    QScrollArea, QSizePolicy, QSplitter
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QRect
 from PyQt6.QtGui import (
@@ -23,7 +23,7 @@ from config import (
     BAUD_RATES, DATA_BITS, STOP_BITS, PARITY_OPTIONS,
     DEFAULT_BAUD, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, DEFAULT_PARITY,
     TIMER_INTERVALS, DEFAULT_TIMER_INTERVAL,
-    RX_BUFFER_OPTIONS, DEFAULT_RX_BUFFER, RX_BACKUP_DIR,
+    RX_BUFFER_OPTIONS, DEFAULT_RX_BUFFER,
     TIMESTAMP_TIMEOUT_OPTIONS, DEFAULT_TIMESTAMP_TIMEOUT,
     FRAME_GAP_OPTIONS, DEFAULT_FRAME_GAP,
     APP_VERSION, APP_UPDATE_TIME,
@@ -34,6 +34,10 @@ from config import (
 from serial_core import SerialCore
 from utils import format_rx_data, str_to_hex, hex_to_str, is_valid_hex
 from tool_log import ToolLogDecoder, load_point_codes
+from app_cache import (
+    ensure_docs, settings_path, rx_backup_dir,
+    resolve_point_codes_file, cache_point_codes_from,
+)
 
 
 # ============ 全局 QSS 样式 ============
@@ -266,6 +270,7 @@ class MainWindow(QMainWindow):
         self.hex_tx = False
         self.tool_log_enabled = False
         self.tool_log_decoder = ToolLogDecoder()
+        ensure_docs()
         self._reload_point_codes()
         self.max_rx_buffer = DEFAULT_RX_BUFFER
         self.timestamp_enabled = False
@@ -322,7 +327,7 @@ class MainWindow(QMainWindow):
         grp_settings = QGroupBox("串口设置")
         v = QVBoxLayout(grp_settings)
         v.setSpacing(10)
-        v.setContentsMargins(14, 16, 14, 14)
+        v.setContentsMargins(12, 14, 12, 12)
 
         # 串口号（下拉框 + 刷新按钮同行）
         v.addWidget(QLabel("串口号"))
@@ -415,7 +420,7 @@ class MainWindow(QMainWindow):
         grp_rx = QGroupBox("接收数据")
         v2 = QVBoxLayout(grp_rx)
         v2.setSpacing(8)
-        v2.setContentsMargins(14, 16, 14, 14)
+        v2.setContentsMargins(12, 14, 12, 12)
 
         self.txt_rx = QTextEdit()
         self.txt_rx.setFont(mono_font)
@@ -437,7 +442,7 @@ class MainWindow(QMainWindow):
         self.chk_pause_rx.setToolTip("暂停接收")
         h_rx1.addWidget(self.chk_pause_rx)
         self.chk_tool_log = QCheckBox("A5 帧解析")
-        self.chk_tool_log.setToolTip("解码 A5 5A A5 tool_log 帧流 (POINT/TEXT/RAW)，非帧字节不显示")
+        self.chk_tool_log.setToolTip("解码 A5 5A A5 tool_log 帧流 (POINT/TEXT/RAW)，非帧字节不隐藏")
         self.chk_tool_log.stateChanged.connect(self.on_tool_log_changed)
         h_rx1.addWidget(self.chk_tool_log)
         h_rx1.addSpacing(10)
@@ -493,7 +498,7 @@ class MainWindow(QMainWindow):
         grp_tx_log = self.grp_tx_log
         v_tx_log = QVBoxLayout(grp_tx_log)
         v_tx_log.setSpacing(8)
-        v_tx_log.setContentsMargins(14, 16, 14, 14)
+        v_tx_log.setContentsMargins(12, 14, 12, 12)
 
         self.txt_tx_log = QTextEdit()
         self.txt_tx_log.setFont(mono_font)
@@ -533,22 +538,39 @@ class MainWindow(QMainWindow):
         splitter.addWidget(mid_widget)
 
         # ---- 右侧面板：发送 + 工具 ----
+        # 内容区固定 320px 宽度；滚动条为右侧独立 10px 轨道，不占用/不挤压内容宽度
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(False)
+        right_scroll.setFixedWidth(332)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+            "QScrollBar:vertical { background: #f0f2f5; width: 10px; margin: 0; }"
+            "QScrollBar::handle:vertical { background: #c3c9d0;"
+            " border-radius: 5px; min-height: 30px; }"
+            "QScrollBar::handle:vertical:hover { background: #a0a8b2; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
+        )
+
         right_widget = QWidget()
-        right_widget.setMaximumWidth(320)
+        right_widget.setFixedWidth(320)
         right_panel = QVBoxLayout(right_widget)
         right_panel.setContentsMargins(0, 0, 0, 0)
-        right_panel.setSpacing(10)
+        right_panel.setSpacing(6)
 
         # 发送区
         grp_tx = QGroupBox("发送数据")
         v3 = QVBoxLayout(grp_tx)
         v3.setSpacing(8)
-        v3.setContentsMargins(14, 16, 14, 14)
+        v3.setContentsMargins(12, 14, 12, 12)
 
         self.txt_tx = QTextEdit()
         self.txt_tx.setFont(mono_font)
         self.txt_tx.setPlaceholderText("在此输入要发送的内容...")
-        self.txt_tx.setMaximumHeight(120)
+        self.txt_tx.setMaximumHeight(100)
         v3.addWidget(self.txt_tx)
 
         h_tx = QHBoxLayout()
@@ -569,7 +591,7 @@ class MainWindow(QMainWindow):
         grp_timer = QGroupBox("定时发送")
         v4 = QVBoxLayout(grp_timer)
         v4.setSpacing(8)
-        v4.setContentsMargins(14, 16, 14, 14)
+        v4.setContentsMargins(12, 14, 12, 12)
 
         h_timer = QHBoxLayout()
         self.chk_timer = QCheckBox("启用")
@@ -590,7 +612,7 @@ class MainWindow(QMainWindow):
         grp_save = QGroupBox("保存选项")
         v5 = QVBoxLayout(grp_save)
         v5.setSpacing(8)
-        v5.setContentsMargins(14, 16, 14, 14)
+        v5.setContentsMargins(12, 14, 12, 12)
 
         h_fmt = QHBoxLayout()
         h_fmt.addWidget(QLabel("格式"))
@@ -613,11 +635,32 @@ class MainWindow(QMainWindow):
         v5.addWidget(self.btn_save)
         right_panel.addWidget(grp_save)
 
+        # 点码表 (A5 帧解析)
+        grp_pc = QGroupBox("点码表")
+        v_pc = QVBoxLayout(grp_pc)
+        v_pc.setSpacing(8)
+        v_pc.setContentsMargins(12, 14, 12, 12)
+
+        self.btn_choose_pc = QPushButton("选择 YAML 点码表...")
+        self.btn_choose_pc.setToolTip(
+            "选择点码名映射 YAML 文件：选中后立即解析并缓存到系统文档目录，"
+            "勾选「A5 帧解析」时即按此表解码；解析错误会弹出提示"
+        )
+        self.btn_choose_pc.clicked.connect(self.on_choose_point_codes)
+        v_pc.addWidget(self.btn_choose_pc)
+
+        self.lbl_pc_cache = QLabel()
+        self.lbl_pc_cache.setWordWrap(True)
+        self.lbl_pc_cache.setStyleSheet("color: #888888; font-size: 12px;")
+        v_pc.addWidget(self.lbl_pc_cache)
+        right_panel.addWidget(grp_pc)
+        self._refresh_pc_cache_label()
+
         # HEX 转换
         grp_hex = QGroupBox("HEX 转换")
         v6 = QVBoxLayout(grp_hex)
         v6.setSpacing(8)
-        v6.setContentsMargins(14, 16, 14, 14)
+        v6.setContentsMargins(12, 14, 12, 12)
 
         self.txt_hex_in = QTextEdit()
         self.txt_hex_in.setFont(mono_font)
@@ -647,7 +690,7 @@ class MainWindow(QMainWindow):
         grp_display = QGroupBox("显示设置")
         v7 = QVBoxLayout(grp_display)
         v7.setSpacing(8)
-        v7.setContentsMargins(14, 16, 14, 14)
+        v7.setContentsMargins(12, 14, 12, 12)
 
         h_size = QHBoxLayout()
         h_size.addWidget(QLabel("大小"))
@@ -675,7 +718,8 @@ class MainWindow(QMainWindow):
         right_panel.addWidget(grp_display)
 
         right_panel.addStretch()
-        splitter.addWidget(right_widget)
+        right_scroll.setWidget(right_widget)
+        splitter.addWidget(right_scroll)
 
         # 设置分割器初始比例
         splitter.setStretchFactor(0, 0)
@@ -973,21 +1017,45 @@ class MainWindow(QMainWindow):
         self.tool_log_decoder.buffer.clear()
 
     def _reload_point_codes(self):
-        """重读点码表到解码器；文件缺失或损坏时保持当前表"""
+        """从缓存（文档目录）读取点码表到解码器；无缓存时保持当前表"""
         try:
-            self.tool_log_decoder.point_codes = load_point_codes(self._point_codes_path())
-        except FileNotFoundError:
-            pass
+            path = resolve_point_codes_file()
+            if path:
+                self.tool_log_decoder.point_codes = load_point_codes(path)
         except Exception as e:
             print(f"[ERROR] 点码表读取失败，保持当前表: {e}")
 
-    def _point_codes_path(self) -> str:
-        # 打包后：exe 所在目录（与 .settings.json 同规则）；开发时：源码所在目录
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base_dir, "point_codes.yaml")
+    def on_choose_point_codes(self):
+        """选择任意 YAML 点码表：解析验证 → 缓存到文档目录 → 立即生效；错误弹窗"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择点码表 YAML 文件", os.path.expanduser("~"),
+            "YAML 文件 (*.yaml *.yml)",
+        )
+        if not path:
+            return
+        try:
+            codes = load_point_codes(path)  # 先解析验证，错误在此抛出
+            cache_path = cache_point_codes_from(path)
+        except Exception as e:
+            QMessageBox.warning(
+                self, "点码表加载失败",
+                f"解析 YAML 失败:\n{e}\n\n已保持当前点码表不变",
+            )
+            return
+        self.tool_log_decoder.point_codes = codes
+        self._refresh_pc_cache_label()
+        QMessageBox.information(
+            self, "点码表已加载",
+            f"加载成功，点码表已缓存到文档目录:\n{cache_path}",
+        )
+
+    def _refresh_pc_cache_label(self):
+        """刷新点码表缓存状态展示（缓存统一在系统文档目录）"""
+        path = resolve_point_codes_file()
+        self.lbl_pc_cache.setText(
+            f"当前缓存: {path}" if path
+            else "尚未配置：勾选「A5 帧解析」时点码将显示为 UNKNOWN。点上方按钮选择 YAML 文件。"
+        )
 
     def on_show_tx_log_changed(self, state):
         checked = state == Qt.CheckState.Checked.value
@@ -1056,7 +1124,7 @@ class MainWindow(QMainWindow):
     def _auto_backup_rx_buffer(self):
         """将当前接收缓冲区数据自动打包保存到文件，然后清空继续接收"""
         try:
-            backup_dir = os.path.join(os.getcwd(), RX_BACKUP_DIR)
+            backup_dir = rx_backup_dir()
             os.makedirs(backup_dir, exist_ok=True)
 
             self._backup_counter += 1
@@ -1198,12 +1266,8 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def _settings_path(self) -> str:
-        # 打包后：exe 所在目录；开发时：源码所在目录
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base_dir, ".settings.json")
+        # 统一存放到系统文档目录缓存（app_cache.settings_path 内含旧位置迁移）
+        return settings_path()
 
     def _load_settings(self):
         """加载上次的串口参数缓存"""
