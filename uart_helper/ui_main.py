@@ -32,7 +32,7 @@ from config import (
     STATUS_CONNECTED, STATUS_DISCONNECTED, STATUS_ERROR,
 )
 from serial_core import SerialCore
-from utils import format_rx_data, str_to_hex, hex_to_str, is_valid_hex
+from utils import format_rx_data
 from tool_log import ToolLogDecoder, load_point_codes
 from app_cache import (
     ensure_docs, settings_path, rx_backup_dir,
@@ -327,7 +327,7 @@ class MainWindow(QMainWindow):
         grp_settings = QGroupBox("串口设置")
         v = QVBoxLayout(grp_settings)
         v.setSpacing(10)
-        v.setContentsMargins(12, 14, 12, 12)
+        v.setContentsMargins(14, 16, 14, 14)
 
         # 串口号（下拉框 + 刷新按钮同行）
         v.addWidget(QLabel("串口号"))
@@ -420,7 +420,7 @@ class MainWindow(QMainWindow):
         grp_rx = QGroupBox("接收数据")
         v2 = QVBoxLayout(grp_rx)
         v2.setSpacing(8)
-        v2.setContentsMargins(12, 14, 12, 12)
+        v2.setContentsMargins(14, 16, 14, 14)
 
         self.txt_rx = QTextEdit()
         self.txt_rx.setFont(mono_font)
@@ -498,7 +498,7 @@ class MainWindow(QMainWindow):
         grp_tx_log = self.grp_tx_log
         v_tx_log = QVBoxLayout(grp_tx_log)
         v_tx_log.setSpacing(8)
-        v_tx_log.setContentsMargins(12, 14, 12, 12)
+        v_tx_log.setContentsMargins(14, 16, 14, 14)
 
         self.txt_tx_log = QTextEdit()
         self.txt_tx_log.setFont(mono_font)
@@ -538,10 +538,10 @@ class MainWindow(QMainWindow):
         splitter.addWidget(mid_widget)
 
         # ---- 右侧面板：发送 + 工具 ----
-        # 内容区固定 320px 宽度；滚动条为右侧独立 10px 轨道，不占用/不挤压内容宽度
+        # 自适应：宽度随窗口拉伸，内容自动填充；高度不足时用滚动条（10px 独立轨道）
         right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(False)
-        right_scroll.setFixedWidth(332)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setMinimumWidth(300)
         right_scroll.setFrameShape(QFrame.Shape.NoFrame)
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         right_scroll.setStyleSheet(
@@ -556,16 +556,15 @@ class MainWindow(QMainWindow):
         )
 
         right_widget = QWidget()
-        right_widget.setFixedWidth(320)
         right_panel = QVBoxLayout(right_widget)
         right_panel.setContentsMargins(0, 0, 0, 0)
-        right_panel.setSpacing(6)
+        right_panel.setSpacing(12)
 
         # 发送区
         grp_tx = QGroupBox("发送数据")
         v3 = QVBoxLayout(grp_tx)
         v3.setSpacing(8)
-        v3.setContentsMargins(12, 14, 12, 12)
+        v3.setContentsMargins(14, 16, 14, 14)
 
         self.txt_tx = QTextEdit()
         self.txt_tx.setFont(mono_font)
@@ -591,7 +590,7 @@ class MainWindow(QMainWindow):
         grp_timer = QGroupBox("定时发送")
         v4 = QVBoxLayout(grp_timer)
         v4.setSpacing(8)
-        v4.setContentsMargins(12, 14, 12, 12)
+        v4.setContentsMargins(14, 16, 14, 14)
 
         h_timer = QHBoxLayout()
         self.chk_timer = QCheckBox("启用")
@@ -602,7 +601,7 @@ class MainWindow(QMainWindow):
         self.cmb_interval.addItems(map(str, TIMER_INTERVALS))
         self.cmb_interval.setCurrentText(str(DEFAULT_TIMER_INTERVAL))
         self.cmb_interval.setEditable(True)
-        self.cmb_interval.setMaximumWidth(80)
+        self.cmb_interval.setMaximumWidth(140)
         h_timer.addWidget(self.cmb_interval)
         h_timer.addStretch()
         v4.addLayout(h_timer)
@@ -612,7 +611,7 @@ class MainWindow(QMainWindow):
         grp_save = QGroupBox("保存选项")
         v5 = QVBoxLayout(grp_save)
         v5.setSpacing(8)
-        v5.setContentsMargins(12, 14, 12, 12)
+        v5.setContentsMargins(14, 16, 14, 14)
 
         h_fmt = QHBoxLayout()
         h_fmt.addWidget(QLabel("格式"))
@@ -639,7 +638,7 @@ class MainWindow(QMainWindow):
         grp_pc = QGroupBox("点码表")
         v_pc = QVBoxLayout(grp_pc)
         v_pc.setSpacing(8)
-        v_pc.setContentsMargins(12, 14, 12, 12)
+        v_pc.setContentsMargins(14, 16, 14, 14)
 
         self.btn_choose_pc = QPushButton("选择 YAML 点码表...")
         self.btn_choose_pc.setToolTip(
@@ -656,41 +655,11 @@ class MainWindow(QMainWindow):
         right_panel.addWidget(grp_pc)
         self._refresh_pc_cache_label()
 
-        # HEX 转换
-        grp_hex = QGroupBox("HEX 转换")
-        v6 = QVBoxLayout(grp_hex)
-        v6.setSpacing(8)
-        v6.setContentsMargins(12, 14, 12, 12)
-
-        self.txt_hex_in = QTextEdit()
-        self.txt_hex_in.setFont(mono_font)
-        self.txt_hex_in.setPlaceholderText("输入内容...")
-        self.txt_hex_in.setMaximumHeight(70)
-        v6.addWidget(self.txt_hex_in)
-
-        h_dir = QHBoxLayout()
-        self.cmb_hex_dir = QComboBox()
-        self.cmb_hex_dir.addItems(["字符串 → HEX", "HEX → 字符串"])
-        h_dir.addWidget(self.cmb_hex_dir)
-        h_dir.addStretch()
-        self.btn_hex_convert = QPushButton("转换")
-        self.btn_hex_convert.setObjectName("secondary")
-        h_dir.addWidget(self.btn_hex_convert)
-        v6.addLayout(h_dir)
-
-        self.txt_hex_out = QTextEdit()
-        self.txt_hex_out.setFont(mono_font)
-        self.txt_hex_out.setReadOnly(True)
-        self.txt_hex_out.setPlaceholderText("结果...")
-        self.txt_hex_out.setMaximumHeight(70)
-        v6.addWidget(self.txt_hex_out)
-        right_panel.addWidget(grp_hex)
-
         # 显示设置
         grp_display = QGroupBox("显示设置")
         v7 = QVBoxLayout(grp_display)
         v7.setSpacing(8)
-        v7.setContentsMargins(12, 14, 12, 12)
+        v7.setContentsMargins(14, 16, 14, 14)
 
         h_size = QHBoxLayout()
         h_size.addWidget(QLabel("大小"))
@@ -724,7 +693,7 @@ class MainWindow(QMainWindow):
         # 设置分割器初始比例
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 0)
+        splitter.setStretchFactor(2, 1)
         outer_v.addWidget(splitter, 1)
 
         self._apply_display_settings()
@@ -780,7 +749,6 @@ class MainWindow(QMainWindow):
         self.btn_clear_tx_log.clicked.connect(self.on_clear_tx_log_clicked)
         self.btn_browse.clicked.connect(self.on_browse_clicked)
         self.btn_save.clicked.connect(self.on_save_with_options_clicked)
-        self.btn_hex_convert.clicked.connect(self.on_hex_convert_clicked)
         self.sig_rx_data.connect(self._on_rx_data_ui)
         self.sig_status.connect(self._on_status_ui)
         self.sig_rx_error.connect(self._on_rx_error_ui)
@@ -1221,25 +1189,6 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "保存成功", f"数据已保存到:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "保存失败", str(e))
-
-    def on_hex_convert_clicked(self):
-        text_in = self.txt_hex_in.toPlainText()
-        if not text_in:
-            self.txt_hex_out.clear()
-            return
-
-        direction = self.cmb_hex_dir.currentIndex()
-        try:
-            if direction == 0:
-                result = str_to_hex(text_in)
-            else:
-                if not is_valid_hex(text_in):
-                    self.txt_hex_out.setPlainText("错误：输入的不是合法 HEX 格式")
-                    return
-                result = hex_to_str(text_in)
-            self.txt_hex_out.setPlainText(result)
-        except Exception as e:
-            self.txt_hex_out.setPlainText(f"转换错误: {e}")
 
     def on_timer_toggled(self, checked: bool):
         if checked:

@@ -21,36 +21,3 @@ def format_rx_data(data: bytes, hex_mode: bool) -> str:
         return data.decode("utf-8", errors="replace")
     except Exception:
         return bytes_to_ascii(data)
-
-
-def str_to_hex(text: str, sep: str = " ", encoding: str = "utf-8") -> str:
-    """字符串转十六进制字符串"""
-    return bytes_to_hex(text.encode(encoding), sep=sep)
-
-
-def hex_to_str(hex_str: str, encoding: str = "utf-8") -> str:
-    """十六进制字符串转字符串，如 '41 42' -> 'AB'"""
-    data = hex_to_bytes(hex_str)
-    return data.decode(encoding, errors="replace")
-
-
-def hex_to_bytes(hex_str: str) -> bytes:
-    """十六进制字符串转字节，支持空格、逗号、0x 前缀"""
-    cleaned = hex_str.replace(" ", "").replace(",", "").replace("0x", "").strip()
-    if not cleaned:
-        return b""
-    if len(cleaned) % 2 != 0:
-        cleaned = "0" + cleaned
-    return bytes.fromhex(cleaned)
-
-
-def is_valid_hex(hex_str: str) -> bool:
-    """检查字符串是否为合法十六进制格式"""
-    cleaned = hex_str.replace(" ", "").replace(",", "").strip()
-    if not cleaned:
-        return True
-    try:
-        bytes.fromhex(cleaned)
-        return True
-    except ValueError:
-        return False

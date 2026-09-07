@@ -45,7 +45,7 @@ WINDOW_TITLE = "UART 串口助手"
 WINDOW_MIN_SIZE = (900, 650)
 
 # 版本信息（左下角显示；发布新版时更新版本号与时间）
-APP_VERSION = "2.0"
+APP_VERSION = "2.1"
 APP_UPDATE_TIME = "2026-09-07"
 
 # 显示设置
