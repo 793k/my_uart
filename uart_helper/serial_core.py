@@ -8,6 +8,11 @@ import threading
 import time
 from typing import Callable, Optional, List
 
+# 接收线程异常处理：瞬态故障（如系统休眠唤醒后 USB 串口短暂失效）
+# 退避重试，连续失败超过阈值才判定掉线并通知上层，避免线程静默死亡
+RX_RETRY_INTERVAL_S = 0.5
+RX_MAX_CONSECUTIVE_ERRORS = 5
+
 
 class SerialCore:
     """串口核心类：封装所有串口操作，线程安全"""
@@ -18,6 +23,7 @@ class SerialCore:
         self._running = False
         self._rx_thread: Optional[threading.Thread] = None
         self._callback: Optional[Callable[[bytes], None]] = None
+        self._error_callback: Optional[Callable[[str], None]] = None
         self._lock = threading.Lock()
         self._last_error: str = ""
 
@@ -120,12 +126,18 @@ class SerialCore:
         """设置接收数据回调"""
         self._callback = callback
 
+    def set_error_callback(self, callback: Callable[[str], None]) -> None:
+        """设置接收异常回调：串口读取持续失败判定掉线时通知"""
+        self._error_callback = callback
+
     def get_last_error(self) -> str:
         """获取最后一次错误信息"""
         return self._last_error
 
     def _rx_loop(self) -> None:
-        """后台接收线程"""
+        """后台接收线程：瞬态异常退避重试，持续失败判定掉线并通知上层"""
+        consecutive_errors = 0
+        last_error = ""
         while self._running and self._ser and self._ser.is_open:
             try:
                 in_waiting = self._ser.in_waiting
@@ -135,8 +147,18 @@ class SerialCore:
                         self._callback(data)
                 else:
                     time.sleep(0.005)
-            except Exception:
-                break
+                consecutive_errors = 0
+            except Exception as e:
+                # 瞬态故障（休眠唤醒/USB 短暂异常）：退避重试，不退出线程
+                last_error = str(e)
+                consecutive_errors += 1
+                if consecutive_errors >= RX_MAX_CONSECUTIVE_ERRORS:
+                    break
+                time.sleep(RX_RETRY_INTERVAL_S)
+
+        # 非主动 close() 退出且有过错误：接收已失效（如 USB 掉线），通知上层
+        if self._running and last_error and self._error_callback:
+            self._error_callback(last_error)
 
     def get_port_info(self) -> str:
         """获取当前串口信息"""

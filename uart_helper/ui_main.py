@@ -14,7 +14,10 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QSplitter
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QRect
-from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QPainter, QPen, QBrush, QPixmap, QTextOption
+from PyQt6.QtGui import (
+    QFont, QColor, QPalette, QIcon, QPainter, QPen, QBrush,
+    QPixmap, QTextBlockFormat, QTextCursor
+)
 
 from config import (
     BAUD_RATES, DATA_BITS, STOP_BITS, PARITY_OPTIONS,
@@ -23,12 +26,14 @@ from config import (
     RX_BUFFER_OPTIONS, DEFAULT_RX_BUFFER, RX_BACKUP_DIR,
     TIMESTAMP_TIMEOUT_OPTIONS, DEFAULT_TIMESTAMP_TIMEOUT,
     FRAME_GAP_OPTIONS, DEFAULT_FRAME_GAP,
+    APP_VERSION, APP_UPDATE_TIME,
     DEFAULT_FONT_SIZE, DEFAULT_LINE_SPACING,
     WINDOW_TITLE, WINDOW_MIN_SIZE,
     STATUS_CONNECTED, STATUS_DISCONNECTED, STATUS_ERROR,
 )
 from serial_core import SerialCore
 from utils import format_rx_data, str_to_hex, hex_to_str, is_valid_hex
+from tool_log import ToolLogDecoder, load_point_codes
 
 
 # ============ 全局 QSS 样式 ============
@@ -249,6 +254,7 @@ class MainWindow(QMainWindow):
 
     sig_rx_data = pyqtSignal(bytes)
     sig_status = pyqtSignal(str, str)
+    sig_rx_error = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -258,6 +264,9 @@ class MainWindow(QMainWindow):
         self.tx_count = 0
         self.hex_rx = False
         self.hex_tx = False
+        self.tool_log_enabled = False
+        self.tool_log_decoder = ToolLogDecoder()
+        self._reload_point_codes()
         self.max_rx_buffer = DEFAULT_RX_BUFFER
         self.timestamp_enabled = False
         self.timestamp_timeout = DEFAULT_TIMESTAMP_TIMEOUT
@@ -427,6 +436,10 @@ class MainWindow(QMainWindow):
         self.chk_pause_rx = QCheckBox("暂停")
         self.chk_pause_rx.setToolTip("暂停接收")
         h_rx1.addWidget(self.chk_pause_rx)
+        self.chk_tool_log = QCheckBox("A5 帧解析")
+        self.chk_tool_log.setToolTip("解码 A5 5A A5 tool_log 帧流 (POINT/TEXT/RAW)，非帧字节不显示")
+        self.chk_tool_log.stateChanged.connect(self.on_tool_log_changed)
+        h_rx1.addWidget(self.chk_tool_log)
         h_rx1.addSpacing(10)
         self.chk_show_tx_log = QCheckBox("发送记录")
         self.chk_show_tx_log.setToolTip("显示/隐藏发送记录窗口")
@@ -507,6 +520,10 @@ class MainWindow(QMainWindow):
 
         # 统计信息
         h_stats = QHBoxLayout()
+        self.lbl_version = QLabel(f"v{APP_VERSION}  |  {APP_UPDATE_TIME}")
+        self.lbl_version.setStyleSheet("color: #b0b0b0; font-size: 12px;")
+        self.lbl_version.setToolTip("版本号 | 更新时间（发布新版时更新）")
+        h_stats.addWidget(self.lbl_version)
         h_stats.addStretch()
         self.lbl_stats = QLabel("RX: 0 bytes  |  TX: 0 bytes")
         self.lbl_stats.setStyleSheet("color: #888888; font-size: 12px;")
@@ -686,11 +703,14 @@ class MainWindow(QMainWindow):
         self.txt_rx.setFont(font)
         self.txt_tx_log.setFont(font)
 
-        # 用 QTextOption 设置默认行间距，避免每次插入都操作文档格式导致崩溃
-        option = QTextOption()
-        option.setLineHeight(int(spacing * 100), 4)
-        self.txt_rx.document().setDefaultTextOption(option)
-        self.txt_tx_log.document().setDefaultTextOption(option)
+    def _line_spacing_block_format(self):
+        """当前行距对应的块格式；QTextOption 无 setLineHeight，用 QTextBlockFormat 实现"""
+        fmt = QTextBlockFormat()
+        fmt.setLineHeight(
+            int(round(self._display_line_spacing * 100)),
+            QTextBlockFormat.LineHeightTypes.ProportionalHeight.value,
+        )
+        return fmt
 
     def on_display_setting_changed(self):
         self._apply_display_settings()
@@ -719,7 +739,9 @@ class MainWindow(QMainWindow):
         self.btn_hex_convert.clicked.connect(self.on_hex_convert_clicked)
         self.sig_rx_data.connect(self._on_rx_data_ui)
         self.sig_status.connect(self._on_status_ui)
+        self.sig_rx_error.connect(self._on_rx_error_ui)
         self.serial.set_rx_callback(self._on_rx_data_thread)
+        self.serial.set_error_callback(self._on_rx_error_thread)
         # 实时参数更新（串口打开时生效）
         self.cmb_baud.currentTextChanged.connect(self.on_param_changed)
         self.cmb_data.currentTextChanged.connect(self.on_param_changed)
@@ -757,11 +779,7 @@ class MainWindow(QMainWindow):
     def on_open_clicked(self):
         if self.serial.is_open():
             self.serial.close()
-            self.btn_open.setText("打开串口")
-            self.lbl_status.setText(STATUS_DISCONNECTED)
-            self._apply_status(STATUS_DISCONNECTED)
-            self.btn_send.setEnabled(False)
-            self.chk_timer.setChecked(False)
+            self._apply_serial_closed_ui()
             return
 
         port = self._get_selected_port()
@@ -789,6 +807,26 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText(STATUS_ERROR)
             self._apply_status(STATUS_ERROR)
             QMessageBox.critical(self, "打开失败", f"无法打开串口:\n{err}")
+
+    def _apply_serial_closed_ui(self):
+        """界面切回未连接状态（串口已关闭后调用）"""
+        self.btn_open.setText("打开串口")
+        self.lbl_status.setText(STATUS_DISCONNECTED)
+        self._apply_status(STATUS_DISCONNECTED)
+        self.btn_send.setEnabled(False)
+        self.chk_timer.setChecked(False)
+
+    def _on_rx_error_thread(self, msg: str):
+        self.sig_rx_error.emit(msg)
+
+    def _on_rx_error_ui(self, msg: str):
+        """接收线程判定串口掉线（如休眠唤醒后 USB 失效）：复位界面并提示重连"""
+        self.serial.close()
+        self._apply_serial_closed_ui()
+        QMessageBox.warning(
+            self, "串口异常",
+            f"串口接收持续失败，设备可能已掉线（休眠/拔插后常见）。\n{msg}\n\n请重新打开串口。",
+        )
 
     def on_send_clicked(self):
         if not self.serial.is_open():
@@ -828,6 +866,21 @@ class MainWindow(QMainWindow):
             # 保存原始字节用于 HEX 切换时重新格式化
             self._raw_rx_bytes += data
 
+            if self.tool_log_enabled:
+                # A5 帧解析模式：帧解码为可读行；非帧字节同样返回显示，不隐藏任何数据
+                lines = self.tool_log_decoder.feed(data)
+                if not lines:
+                    self.rx_count += len(data)
+                    self._update_stats()
+                    return
+                if self.timestamp_enabled:
+                    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                    lines = [f"[{ts}] {line}" for line in lines]
+                self._append_rx_text("".join(f"{line}\n" for line in lines))
+                self.rx_count += len(data)
+                self._update_stats()
+                return
+
             text = format_rx_data(data, self.hex_rx)
 
             # 时间戳
@@ -852,22 +905,23 @@ class MainWindow(QMainWindow):
                     text = f"{prefix}[{ts}] {text}\n"
 
             self._last_rx_time = now
-            self.rx_buffer += text
-
-            # 缓冲区超限时：打包旧数据到文件，清空缓冲区继续接收
-            if len(self.rx_buffer) > self.max_rx_buffer:
-                self._auto_backup_rx_buffer()
-                self.rx_buffer = ""
-                self._raw_rx_bytes = bytearray()
-                self.txt_rx.clear()
-
-            self._insert_to_editor(self.txt_rx, text)
+            self._append_rx_text(text)
 
             self.rx_count += len(data)
             self._update_stats()
         except Exception as e:
             # 槽函数异常保护：任何异常都不应导致 Qt 崩溃
             print(f"[ERROR] _on_rx_data_ui: {e}")
+
+    def _append_rx_text(self, text: str):
+        """追加接收文本到缓冲与编辑器；缓冲区超限时自动打包备份"""
+        self.rx_buffer += text
+        if len(self.rx_buffer) > self.max_rx_buffer:
+            self._auto_backup_rx_buffer()
+            self.rx_buffer = ""
+            self._raw_rx_bytes = bytearray()
+            self.txt_rx.clear()
+        self._insert_to_editor(self.txt_rx, text)
 
     def _on_status_ui(self, msg: str, color: str):
         self.lbl_status.setText(msg)
@@ -910,6 +964,30 @@ class MainWindow(QMainWindow):
 
     def on_hex_tx_changed(self, state):
         self.hex_tx = state == Qt.CheckState.Checked.value
+
+    def on_tool_log_changed(self, state):
+        """切换 A5 帧解析模式；开启时重读点码表，关闭/开启时丢弃解码器残留半帧"""
+        if state == Qt.CheckState.Checked.value:
+            self._reload_point_codes()
+        self.tool_log_enabled = state == Qt.CheckState.Checked.value
+        self.tool_log_decoder.buffer.clear()
+
+    def _reload_point_codes(self):
+        """重读点码表到解码器；文件缺失或损坏时保持当前表"""
+        try:
+            self.tool_log_decoder.point_codes = load_point_codes(self._point_codes_path())
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[ERROR] 点码表读取失败，保持当前表: {e}")
+
+    def _point_codes_path(self) -> str:
+        # 打包后：exe 所在目录（与 .settings.json 同规则）；开发时：源码所在目录
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(base_dir, "point_codes.yaml")
 
     def on_show_tx_log_changed(self, state):
         checked = state == Qt.CheckState.Checked.value
@@ -1002,10 +1080,18 @@ class MainWindow(QMainWindow):
             self._raw_rx_bytes = bytearray()
 
     def _insert_to_editor(self, editor: QTextEdit, text: str):
-        """插入文本到末尾"""
+        """插入文本到末尾，新文本块套用当前行距"""
         cursor = editor.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
-        cursor.insertPlainText(text)
+        first_block = editor.document().blockCount() - 1
+        cursor.insertText(text)
+
+        fmt = self._line_spacing_block_format()
+        doc = editor.document()
+        for n in range(first_block, doc.blockCount()):
+            block = doc.findBlockByNumber(n)
+            if block.isValid():
+                QTextCursor(block).setBlockFormat(fmt)
 
     def _append_tx_log(self, text: str, is_hex: bool, has_newline: bool):
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -1028,6 +1114,7 @@ class MainWindow(QMainWindow):
         self._raw_rx_bytes = bytearray()
         self.rx_count = 0
         self._last_rx_time = 0.0
+        self.tool_log_decoder.buffer.clear()
         self._update_stats()
 
     def on_save_rx_clicked(self):
@@ -1136,6 +1223,7 @@ class MainWindow(QMainWindow):
             interval = cfg.get("timer_interval", str(DEFAULT_TIMER_INTERVAL))
             hex_rx = cfg.get("hex_rx", False)
             hex_tx = cfg.get("hex_tx", False)
+            tool_log = cfg.get("tool_log", False)
             ts = cfg.get("timestamp", False)
             timeout = cfg.get("timeout", False)
             frame_gap = cfg.get("frame_gap", False)
@@ -1162,6 +1250,8 @@ class MainWindow(QMainWindow):
                 self.chk_hex_rx.setChecked(True)
             if hex_tx:
                 self.chk_hex_tx.setChecked(True)
+            if tool_log:
+                self.chk_tool_log.setChecked(True)
             if ts:
                 self.chk_timestamp.setChecked(True)
             if timeout:
@@ -1192,6 +1282,7 @@ class MainWindow(QMainWindow):
                 "timer_interval": self.cmb_interval.currentText().strip(),
                 "hex_rx": self.chk_hex_rx.isChecked(),
                 "hex_tx": self.chk_hex_tx.isChecked(),
+                "tool_log": self.chk_tool_log.isChecked(),
                 "timestamp": self.chk_timestamp.isChecked(),
                 "timeout": self.chk_timeout.isChecked(),
                 "frame_gap": self.chk_frame_gap.isChecked(),

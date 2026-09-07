@@ -1,0 +1,28 @@
+# 点码名映射表（tool_log POINT 帧 flag → 名称）——唯一事实源，无内置表
+#
+# ===== A5 5A A5 tool_log 帧格式 =====
+# 帧 = MAGIC(3B: A5 5A A5) + type(1B) + payload_len(2B 大端) + payload
+#   type=1 POINT    payload 4B: flag(2B 大端) + value(2B 大端)；flag → 名称见下表
+#   type=2 TEXT     payload: UTF-8 日志文本，按行显示
+#   type=3 RAW      payload: 原样透传，显示 [RAW] nB: hex 预览
+#   其它类型         显示 [UNKNOWN] type=0xXX n bytes
+#   帧体不完整        等待后续字节拼帧（1s 超时后丢弃头部 1 字节继续重同步）
+#   非帧字节         不隐藏：可打印文本原样显示，不可打印字节转义为 \xNN
+#
+# ===== 用法 =====
+# - 键 = POINT 帧 flag（与固件 tool_log.h 枚举值一致），支持 0x0100 / "0x0100" / 256 写法
+# - 值 = 点码名称，显示为  [POINT] <名称> value=<值>
+# - 未登记的点码显示为 UNKNOWN(XXXX)
+# - 固件新增点码时在本文件追加一行即可，无需修改程序或重新打包；
+#   每次勾选「A5 帧解析」开关时自动重新读取，程序启动时也会读取一次
+# - 此表为完整映射，请与固件端枚举保持同步
+
+0x0100: SYS_LOG_POINT_WDT_FEED
+0x0101: SYS_LOG_POINT_WDT_STALE
+0x0102: SYS_LOG_POINT_WDT_START
+0x0110: SYS_LOG_POINT_ASSERT_TRIGGER
+0x0120: SYS_LOG_POINT_SYS_BOOT
+0x0121: SYS_LOG_POINT_SYS_CRASH
+0x0122: SYS_LOG_POINT_WDT_TIMEOUT_ARMED
+0x0123: SYS_LOG_POINT_WDT_FEED_UNAVAILABLE
+0x0124: SYS_LOG_POINT_WDT_RESET_ARMED
