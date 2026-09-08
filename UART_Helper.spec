@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-
+# onedir 目录版：解决 onefile 重启时 "Failed to start embedded python interpreter" 问题
 
 a = Analysis(
     ['uart_helper\\main.py'],
@@ -19,9 +19,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='UART_Helper',
     debug=False,
     bootloader_ignore_signals=False,
@@ -36,4 +35,14 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['uart_helper\\icon.ico'],
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='UART_Helper',
 )

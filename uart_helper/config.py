@@ -44,12 +44,16 @@ DEFAULT_TIMESTAMP_TIMEOUT = 1000
 FRAME_GAP_OPTIONS = [1, 2, 5, 10, 20, 50, 100]
 DEFAULT_FRAME_GAP = 10
 
+# 空闲自动关闭串口：UI 无鼠标/键盘操作超过设定时长即自动关闭串口（分钟）
+IDLE_CLOSE_OPTIONS = [1, 5, 10, 15, 30, 60]
+DEFAULT_IDLE_CLOSE_MINUTES = 15
+
 # UI 配置
 WINDOW_TITLE = "UART 串口助手"
 WINDOW_MIN_SIZE = (900, 650)
 
 # 版本信息（左下角显示；发布新版时更新版本号与时间）
-APP_VERSION = "2.2"
+APP_VERSION = "2.3"
 APP_UPDATE_TIME = "2026-09-08"
 
 # 显示设置

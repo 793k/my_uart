@@ -4,6 +4,7 @@ ui_main.py — 主窗口界面（PyQt6）美化版
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -14,10 +15,10 @@ from PyQt6.QtWidgets import (
     QLabel, QCheckBox, QSpinBox, QMessageBox, QFileDialog, QFrame,
     QScrollArea, QSizePolicy, QSplitter
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QRect
+from PyQt6.QtCore import Qt, QTimer, QEvent, pyqtSignal, QSize, QRect, QPoint
 from PyQt6.QtGui import (
     QFont, QColor, QPalette, QIcon, QPainter, QPen, QBrush,
-    QPixmap, QTextBlockFormat, QTextCursor
+    QPixmap, QTextBlockFormat, QTextCursor, QCursor
 )
 
 from config import (
@@ -27,6 +28,7 @@ from config import (
     RX_BUFFER_OPTIONS, DEFAULT_RX_BUFFER,
     TIMESTAMP_TIMEOUT_OPTIONS, DEFAULT_TIMESTAMP_TIMEOUT,
     FRAME_GAP_OPTIONS, DEFAULT_FRAME_GAP,
+    IDLE_CLOSE_OPTIONS, DEFAULT_IDLE_CLOSE_MINUTES,
     APP_VERSION, APP_UPDATE_TIME, RAW_RX_CACHE_BYTES,
     DEFAULT_FONT_SIZE, DEFAULT_LINE_SPACING,
     WINDOW_TITLE, WINDOW_MIN_SIZE,
@@ -36,7 +38,7 @@ from serial_core import SerialCore
 from utils import format_rx_data
 from tool_log import ToolLogDecoder, load_point_codes
 from app_cache import (
-    ensure_docs, settings_path, rx_backup_dir,
+    ensure_docs, settings_path, rx_backup_dir, get_cache_dir,
     resolve_point_codes_file, cache_point_codes_from,
 )
 
@@ -286,6 +288,16 @@ class MainWindow(QMainWindow):
         self._display_font_size = DEFAULT_FONT_SIZE
         self._display_line_spacing = DEFAULT_LINE_SPACING
 
+        # 空闲自动关闭串口：UI 活动（鼠标/键盘）计时，默认关闭
+        self.idle_close_enabled = False
+        self.idle_close_minutes = DEFAULT_IDLE_CLOSE_MINUTES
+        self._last_activity = time.monotonic()
+        self._last_cursor_pos = QCursor.pos()
+        self.timer_idle = QTimer(self)
+        self.timer_idle.timeout.connect(self._on_idle_tick)
+        self.timer_idle.start(1000)
+        QApplication.instance().installEventFilter(self)
+
         self._build_ui()
         self._connect_signals()
         self._refresh_ports()
@@ -392,6 +404,12 @@ class MainWindow(QMainWindow):
         self.btn_open.setMinimumHeight(38)
         v.addWidget(self.btn_open)
 
+        # 重启程序按钮
+        self.btn_restart = QPushButton("重启程序")
+        self.btn_restart.setMinimumHeight(38)
+        self.btn_restart.setToolTip("关闭串口并重启本程序（当前参数会被保存）")
+        v.addWidget(self.btn_restart)
+
         # 状态指示灯
         h_status = QHBoxLayout()
         self.lbl_status_dot = QLabel("●")
@@ -403,6 +421,11 @@ class MainWindow(QMainWindow):
         h_status.addWidget(self.lbl_status)
         h_status.addStretch()
         v.addLayout(h_status)
+
+        # 空闲自动关闭倒计时（开启且串口打开时实时显示，否则隐藏）
+        self.lbl_idle_countdown = QLabel("")
+        self.lbl_idle_countdown.setStyleSheet("color: #e65100; font-size: 12px;")
+        v.addWidget(self.lbl_idle_countdown)
 
         v.addStretch()
         left_panel.addWidget(grp_settings)
@@ -685,6 +708,22 @@ class MainWindow(QMainWindow):
         h_line.addStretch()
         v7.addLayout(h_line)
 
+        # 空闲自动关闭串口
+        h_idle = QHBoxLayout()
+        self.chk_idle_close = QCheckBox("空闲自动关串口")
+        self.chk_idle_close.setToolTip("超过设定时长无鼠标/键盘操作时自动关闭串口（有操作即重置计时）")
+        self.chk_idle_close.stateChanged.connect(self.on_idle_close_changed)
+        h_idle.addWidget(self.chk_idle_close)
+        self.cmb_idle_min = QComboBox()
+        self.cmb_idle_min.addItems(map(str, IDLE_CLOSE_OPTIONS))
+        self.cmb_idle_min.setCurrentText(str(DEFAULT_IDLE_CLOSE_MINUTES))
+        self.cmb_idle_min.setMaximumWidth(70)
+        self.cmb_idle_min.currentTextChanged.connect(self.on_idle_min_changed)
+        h_idle.addWidget(self.cmb_idle_min)
+        h_idle.addWidget(QLabel("分钟"))
+        h_idle.addStretch()
+        v7.addLayout(h_idle)
+
         right_panel.addWidget(grp_display)
 
         right_panel.addStretch()
@@ -744,6 +783,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         self.btn_open.clicked.connect(self.on_open_clicked)
         self.btn_refresh.clicked.connect(self._refresh_ports)
+        self.btn_restart.clicked.connect(self.on_restart_clicked)
         self.btn_send.clicked.connect(self.on_send_clicked)
         self.btn_clear_rx.clicked.connect(self.on_clear_rx_clicked)
         self.btn_save_rx.clicked.connect(self.on_save_rx_clicked)
@@ -987,6 +1027,113 @@ class MainWindow(QMainWindow):
             self._reload_point_codes()
         self.tool_log_enabled = state == Qt.CheckState.Checked.value
         self.tool_log_decoder.buffer.clear()
+
+    def on_idle_close_changed(self, state):
+        """空闲自动关串口开关：开启时重新开始计时"""
+        self.idle_close_enabled = state == Qt.CheckState.Checked.value
+        self._last_activity = time.monotonic()
+
+    def on_idle_min_changed(self, text: str):
+        try:
+            self.idle_close_minutes = int(text.strip())
+        except ValueError:
+            pass
+
+    def on_restart_clicked(self):
+        """重启程序：保存设置 → 关闭串口 → 启动新进程替换自身"""
+        answer = QMessageBox.question(
+            self, "重启程序",
+            "确定要重启程序吗？\n当前串口连接将被关闭，接收区数据不会保留。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        # 各步骤独立防护：任何异常都记录日志，不影响最终重启
+        try:
+            self._save_settings()
+        except Exception as e:
+            self._log_error("restart save settings", e)
+        try:
+            self.serial.close()
+        except Exception as e:
+            self._log_error("restart close serial", e)
+        self._launch_restart()
+
+    def _launch_restart(self):
+        """启动新进程后优雅退出当前进程（避免 os._exit 强杀导致 sip 原生崩溃）"""
+        try:
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable]
+            else:
+                cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")]
+            subprocess.Popen(cmd)
+        except Exception as e:
+            self._log_error("restart spawn", e)
+            QMessageBox.critical(self, "重启失败", f"无法启动新进程:\n{e}\n请手动重新打开程序。")
+            return
+        # 正常退出事件循环：closeEvent 会再次保存设置/关闭串口（幂等）
+        app = QApplication.instance()
+        if app:
+            app.quit()
+
+    def _log_error(self, context: str, exc: Exception):
+        """把异常上下文与堆栈追加写入缓存目录 error.log（windowed 模式无控制台可见）"""
+        try:
+            import traceback
+            log_path = os.path.join(get_cache_dir(), "error.log")
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {context}: {exc}\n")
+                f.write(traceback.format_exc())
+                f.write("\n")
+        except Exception:
+            pass
+
+    def eventFilter(self, obj, event):
+        """全局活动监听：键盘/鼠标点击/滚轮等任何交互都重置空闲计时"""
+        t = event.type()
+        if t in (
+            QEvent.Type.KeyPress,
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseMove,
+            QEvent.Type.Wheel,
+            QEvent.Type.WindowActivate,
+        ):
+            self._last_activity = time.monotonic()
+        return False
+
+    def _on_idle_tick(self):
+        """每秒检查：更新倒计时显示；空闲超时且串口打开时自动关闭"""
+        # 实时倒计时（状态区），未启用或未开串口时清空
+        if self.idle_close_enabled and self.serial.is_open():
+            remain = self.idle_close_minutes * 60 - (time.monotonic() - self._last_activity)
+            if remain < 0:
+                remain = 0
+            m, s = divmod(int(remain), 60)
+            self.lbl_idle_countdown.setText(f"空闲自动关闭: {m:02d}:{s:02d}")
+        else:
+            if self.lbl_idle_countdown.text():
+                self.lbl_idle_countdown.setText("")
+
+        if not self.idle_close_enabled or not self.serial.is_open():
+            return
+        pos = QCursor.pos()
+        if pos != self._last_cursor_pos:
+            # 鼠标移动（无需按键）也算活动
+            self._last_cursor_pos = pos
+            self._last_activity = time.monotonic()
+            return
+        if time.monotonic() - self._last_activity >= self.idle_close_minutes * 60:
+            self._auto_close_by_idle()
+
+    def _auto_close_by_idle(self):
+        """空闲超时执行：关闭串口并复位界面，弹窗告知原因"""
+        self.serial.close()
+        self._apply_serial_closed_ui()
+        QMessageBox.information(
+            self, "串口已自动关闭",
+            f"已连续 {self.idle_close_minutes} 分钟无操作，串口已自动关闭。\n如需继续使用请重新打开串口。",
+        )
 
     def _reload_point_codes(self):
         """从缓存（文档目录）读取点码表到解码器；无缓存时保持当前表"""
@@ -1257,6 +1404,8 @@ class MainWindow(QMainWindow):
             timeout = cfg.get("timeout", False)
             frame_gap = cfg.get("frame_gap", False)
             frame_gap_ms = cfg.get("frame_gap_ms", str(DEFAULT_FRAME_GAP))
+            idle_close = cfg.get("idle_close", False)
+            idle_min = cfg.get("idle_close_min", str(DEFAULT_IDLE_CLOSE_MINUTES))
             font_size = cfg.get("font_size", str(DEFAULT_FONT_SIZE))
             line_spacing = cfg.get("line_spacing", str(DEFAULT_LINE_SPACING))
             newline = cfg.get("newline", False)
@@ -1289,6 +1438,10 @@ class MainWindow(QMainWindow):
                 self.chk_frame_gap.setChecked(True)
             if frame_gap_ms:
                 self.cmb_frame_gap.setCurrentText(frame_gap_ms)
+            if idle_close:
+                self.chk_idle_close.setChecked(True)
+            if idle_min:
+                self.cmb_idle_min.setCurrentText(idle_min)
             if font_size:
                 self.cmb_font_size.setCurrentText(font_size)
             if line_spacing:
@@ -1316,6 +1469,8 @@ class MainWindow(QMainWindow):
                 "timeout": self.chk_timeout.isChecked(),
                 "frame_gap": self.chk_frame_gap.isChecked(),
                 "frame_gap_ms": self.cmb_frame_gap.currentText().strip(),
+                "idle_close": self.chk_idle_close.isChecked(),
+                "idle_close_min": self.cmb_idle_min.currentText().strip(),
                 "font_size": self.cmb_font_size.currentText().strip(),
                 "line_spacing": self.cmb_line_spacing.currentText().strip(),
                 "newline": self.chk_newline.isChecked(),

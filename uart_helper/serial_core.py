@@ -77,12 +77,15 @@ class SerialCore:
             return False
 
     def close(self) -> None:
-        """关闭串口"""
+        """关闭串口（幂等，任何异常不向外抛出）"""
         self._running = False
         if self._rx_thread and self._rx_thread.is_alive():
             self._rx_thread.join(timeout=1.0)
-        if self._ser and self._ser.is_open:
-            self._ser.close()
+        try:
+            if self._ser and self._ser.is_open:
+                self._ser.close()
+        except Exception as e:
+            self._last_error = str(e)
         self._ser = None
         self._port_name = ""
 
