@@ -26,6 +26,10 @@ RX_BUFFER_OPTIONS = [50000, 100000, 200000, 500000,
                      1000000, 2000000, 5000000, 10000000]
 DEFAULT_RX_BUFFER = 500000
 
+# 原始字节缓存上限：仅用于 HEX/ASCII 显示模式切换时的历史回看，
+# 超过则丢弃最旧字节，防止长时运行（尤其 A5 解析模式）内存无界增长
+RAW_RX_CACHE_BYTES = 2 * 1024 * 1024
+
 # 自动打包备份目录
 RX_BACKUP_DIR = "rx_backup"
 
@@ -45,8 +49,8 @@ WINDOW_TITLE = "UART 串口助手"
 WINDOW_MIN_SIZE = (900, 650)
 
 # 版本信息（左下角显示；发布新版时更新版本号与时间）
-APP_VERSION = "2.1"
-APP_UPDATE_TIME = "2026-09-07"
+APP_VERSION = "2.2"
+APP_UPDATE_TIME = "2026-09-08"
 
 # 显示设置
 DEFAULT_FONT_SIZE = 11

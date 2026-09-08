@@ -5,6 +5,7 @@ ui_main.py — 主窗口界面（PyQt6）美化版
 import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 from PyQt6.QtWidgets import (
@@ -26,7 +27,7 @@ from config import (
     RX_BUFFER_OPTIONS, DEFAULT_RX_BUFFER,
     TIMESTAMP_TIMEOUT_OPTIONS, DEFAULT_TIMESTAMP_TIMEOUT,
     FRAME_GAP_OPTIONS, DEFAULT_FRAME_GAP,
-    APP_VERSION, APP_UPDATE_TIME,
+    APP_VERSION, APP_UPDATE_TIME, RAW_RX_CACHE_BYTES,
     DEFAULT_FONT_SIZE, DEFAULT_LINE_SPACING,
     WINDOW_TITLE, WINDOW_MIN_SIZE,
     STATUS_CONNECTED, STATUS_DISCONNECTED, STATUS_ERROR,
@@ -877,6 +878,9 @@ class MainWindow(QMainWindow):
 
             # 保存原始字节用于 HEX 切换时重新格式化
             self._raw_rx_bytes += data
+            # 原始字节缓存封顶（防长时运行内存无界增长），只保留最近部分供回看
+            if len(self._raw_rx_bytes) > RAW_RX_CACHE_BYTES:
+                del self._raw_rx_bytes[:len(self._raw_rx_bytes) - RAW_RX_CACHE_BYTES]
 
             if self.tool_log_enabled:
                 # A5 帧解析模式：帧解码为可读行；非帧字节同样返回显示，不隐藏任何数据
@@ -1090,7 +1094,8 @@ class MainWindow(QMainWindow):
             pass
 
     def _auto_backup_rx_buffer(self):
-        """将当前接收缓冲区数据自动打包保存到文件，然后清空继续接收"""
+        """将当前接收缓冲区数据打包保存到文件（后台线程写盘，不阻塞 UI），
+        然后清空继续接收"""
         try:
             backup_dir = rx_backup_dir()
             os.makedirs(backup_dir, exist_ok=True)
@@ -1099,12 +1104,14 @@ class MainWindow(QMainWindow):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"rx_backup_{timestamp}_{self._backup_counter:03d}.txt"
             filepath = os.path.join(backup_dir, filename)
+            content = self.rx_buffer
 
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(self.rx_buffer)
-
-            file_size = os.path.getsize(filepath)
-            size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024 * 1024 else f"{file_size / (1024 * 1024):.2f} MB"
+            size_str = f"{len(content) / 1024:.1f} KB" if len(content) < 1024 * 1024 else f"{len(content) / (1024 * 1024):.2f} MB"
+            threading.Thread(
+                target=self._write_backup_file,
+                args=(filepath, content),
+                daemon=True,
+            ).start()
 
             # 在接收区插入提示信息
             notice = f"\n[自动备份] 缓冲区超限，已打包保存到 {filename} ({size_str})\n"
@@ -1114,6 +1121,15 @@ class MainWindow(QMainWindow):
             # 备份失败时截断旧数据，保证不阻塞接收
             self.rx_buffer = self.rx_buffer[-self.max_rx_buffer:]
             self._raw_rx_bytes = bytearray()
+
+    @staticmethod
+    def _write_backup_file(filepath: str, content: str):
+        """后台线程写备份文件；失败仅记录，不影响接收"""
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            print(f"[ERROR] 自动备份写入失败 {filepath}: {e}")
 
     def _insert_to_editor(self, editor: QTextEdit, text: str):
         """插入文本到末尾，新文本块套用当前行距"""
